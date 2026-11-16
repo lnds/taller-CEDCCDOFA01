@@ -46,12 +46,12 @@ func (s *Store) Add(n Notification) Notification {
 	return n
 }
 
-// Recent devuelve hasta limit avisos, del más reciente al más antiguo.
+// Recent devuelve hasta limit avisos, en el orden en que llegaron.
 func (s *Store) Recent(limit int) []Notification {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := []Notification{}
-	for i := len(s.items) - 1; i > 0 && len(out) < limit; i-- {
+	for i := 0; i < len(s.items) && len(out) < limit; i++ {
 		out = append(out, s.items[i])
 	}
 	return out
