@@ -19,6 +19,10 @@ describe("isActiveOn", () => {
   it("no cubre un día anterior al turno", () => {
     expect(isActiveOn(shift, "2026-09-30")).toBe(false);
   });
+
+  it("cubre el último día del turno", () => {
+    expect(isActiveOn(shift, "2026-10-31")).toBe(true);
+  });
 });
 
 describe("currentShift", () => {
