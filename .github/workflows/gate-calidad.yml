@@ -1,0 +1,104 @@
+name: Gate de calidad
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gate-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Los controles que miran solo lo nuevo se comparan contra la rama de destino.
+  BASE: origin/${{ github.base_ref }}
+  KM_VERSION: "0.48.0"
+  GITLEAKS_VERSION: "8.30.1"
+  GOVULNCHECK_VERSION: "1.1.4"
+  PIP_AUDIT_VERSION: "2.10.1"
+
+jobs:
+  calidad-y-seguridad:
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    steps:
+      # Historial completo: hace falta para comparar contra la rama de destino.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Instala km
+        uses: lnds/kimun-action@v1
+        with:
+          version: ${{ env.KM_VERSION }}
+          badge-dir: ${{ runner.temp }}/km-badge
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: services/notifications/go.mod
+      - name: Instala gitleaks
+        run: |
+          archivo="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          cd "$RUNNER_TEMP"
+          curl -fsSL --retry 3 -O "$base/$archivo"
+          curl -fsSL --retry 3 "$base/gitleaks_${GITLEAKS_VERSION}_checksums.txt" \
+            | grep " $archivo\$" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/bin"
+          tar xzf "$archivo" -C "$RUNNER_TEMP/bin" gitleaks
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      # Análisis estático. Falla si un archivo tocado empeora su nota.
+      - name: Nota del código
+        run: km score --trend "$BASE" --fail-if-worse --gate-scope changed
+
+      # Informa los hallazgos de los archivos tocados; no bloquea.
+      - name: Code smells
+        run: km smells --since-ref "$BASE"
+
+      # Lee completos los archivos de infraestructura tocados y falla si
+      # alguno tiene un secreto literal.
+      - name: Seguridad de la infraestructura
+        run: km infra smells --since-ref "$BASE" --fail-on hard-coded-secret,empty-password
+
+      # Dependencias. Falla con vulnerabilidades altas o críticas en lo que
+      # llega a producción.
+      - name: Dependencias de catalog
+        working-directory: services/catalog
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Dependencias de incidents
+        working-directory: services/incidents
+        run: |
+          uv export --frozen --no-dev --no-hashes --no-emit-project -o "$RUNNER_TEMP/req.txt"
+          uvx "pip-audit==${PIP_AUDIT_VERSION}" -r "$RUNNER_TEMP/req.txt" --no-deps --disable-pip
+
+      # Informa, pero no bloquea: los hallazgos están en la biblioteca
+      # estándar y se corrigen cambiando la versión de Go del servicio.
+      - name: Dependencias de notifications
+        working-directory: services/notifications
+        continue-on-error: true
+        run: |
+          go install "golang.org/x/vuln/cmd/govulncheck@v${GOVULNCHECK_VERSION}"
+          govulncheck ./...
+
+      # Secretos en los commits que agrega el pull request.
+      - name: Secretos
+        run: gitleaks detect --redact -v --log-opts="$BASE..HEAD"
+
+  construye-imagenes:
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t pager-incidents services/incidents
+      - run: docker build -t pager-catalog services/catalog
+      - run: docker build -t pager-notifications services/notifications
+      - run: docker images

@@ -19,6 +19,10 @@ describe("isActiveOn", () => {
   it("no cubre un día anterior al turno", () => {
     expect(isActiveOn(shift, "2026-09-30")).toBe(false);
   });
+
+  it("cubre el último día del turno", () => {
+    expect(isActiveOn(shift, "2026-10-31")).toBe(true);
+  });
 });
 
 describe("currentShift", () => {
@@ -29,6 +33,20 @@ describe("currentShift", () => {
   it("elige el turno vigente", () => {
     const old = { ...shift, id: 2, start_date: "2026-09-01", end_date: "2026-09-30" };
     expect(currentShift([old, shift], "2026-10-06")).toBeDefined();
+  });
+});
+
+describe("currentShift con varios turnos", () => {
+  it("elige el turno con menor identificador", () => {
+    const primero = { ...shift, id: 1 };
+    const segundo = { ...shift, id: 2 };
+
+    const resultado = currentShift(
+      [segundo, primero],
+      "2026-10-15"
+    );
+
+    expect(resultado?.id).toBe(1);
   });
 });
 
